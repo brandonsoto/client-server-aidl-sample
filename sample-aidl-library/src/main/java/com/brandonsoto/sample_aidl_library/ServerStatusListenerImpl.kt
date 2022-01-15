@@ -16,13 +16,13 @@ internal class ServerStatusListenerImpl(
 ): IServerStatusListener.Stub() {
     override fun onSuccess(data: ServerData?) {
         Log.d(TAG, "onSuccess: data=$data")
-        data?.let { channel.sendAndLogResult(ServerEvent.Result(it)) }
+        data?.let { channel.sendAndLogResult(ServerEvent.EventA(it)) }
     }
 
     override fun onFailure(data: ServerData?, errorCode: Int) {
         val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
         Log.d(TAG, "onFailure: data=$data, errorCode=$errorCode, error=$error")
-        data?.let { channel.sendAndLogResult(ServerEvent.Result(it, error)) }
+        data?.let { channel.sendAndLogResult(ServerEvent.EventA(it, error)) }
     }
 
     private fun Channel<ServerEvent>.sendAndLogResult(event: ServerEvent) {

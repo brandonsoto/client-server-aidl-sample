@@ -9,6 +9,11 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Clientserveraidlsample">
+        <service
+            android:name=".service.ServerService"
+            android:enabled="true"
+            android:exported="true" />
+
         <activity
             android:name=".ServerActivity"
             android:exported="true">

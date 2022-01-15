@@ -12,8 +12,10 @@ enum class ServerError {
  * Represents the types of events received from the Server Service.
  */
 sealed class ServerEvent {
-    data class Result(
+    data class EventA(
         val data: ServerData,
         val error: ServerError = ServerError.NONE
     ) : ServerEvent()
+
+    // more events would go here
 }
