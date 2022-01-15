@@ -7,6 +7,10 @@
         android:name="com.brandonsoto.permission.SAMPLE_AIDL_INTERFACE"
         android:protectionLevel="normal" />
 
+    <queries>
+        <package android:name="com.brandonsoto.sampleserver" />
+    </queries>
+
     <application>
 <!--        <activity-->
 <!--            android:name=".ui.SampleLibraryActivity"-->

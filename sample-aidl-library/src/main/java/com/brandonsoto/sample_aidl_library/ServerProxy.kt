@@ -38,14 +38,6 @@ class ServerProxy(private val context: Context) {
     @RequiresPermission(SERVER_PERMISSION)
     val serverEvents: Flow<ServerEvent> = mEventChannel.consumeAsFlow()
 
-    init {
-        val intent = Intent().apply {
-            component = ComponentName("com.example.myapplication", "com.example.myapplication.service.ServerService")
-        }
-        val result = context.bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE)
-        Log.v(TAG, "bindService result: $result")
-    }
-
     /**
      * Sends a Server request for [data]. Listen for the result of the connect request
      * via [serverEvents].
@@ -55,7 +47,7 @@ class ServerProxy(private val context: Context) {
      */
     @RequiresPermission(SERVER_PERMISSION)
     fun doSomething(data: ServerData): Boolean {
-        Log.d(TAG, "doSomething: $data")
+        Log.v(TAG, "doSomething: $data")
 
         try {
             synchronized(this) {
@@ -71,6 +63,27 @@ class ServerProxy(private val context: Context) {
         return false
     }
 
+    /**
+     * Initializes this proxy's connection to the server.
+     *
+     * @return true if the service was successfully bound to; otherwise false
+     */
+    @RequiresPermission(SERVER_PERMISSION)
+    fun setup(): Boolean {
+        synchronized(this) {
+            return if (mServerService == null) {
+                val intent = Intent().apply {
+                    component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
+                }
+                val result = context.bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE)
+                Log.d(TAG, "setup: bindService result: $result")
+                result
+            } else {
+                Log.d(TAG, "setup: service is already bound")
+                true
+            }
+        }
+    }
 
     /**
      * Tears down this manager's resources.
@@ -80,7 +93,7 @@ class ServerProxy(private val context: Context) {
      */
     @RequiresPermission(SERVER_PERMISSION)
     fun teardown() {
-        Log.d(TAG, "teardown")
+        Log.v(TAG, "teardown")
         try {
             synchronized(this) {
                 mServerService?.unregisterStatusListener(mServerStatusListener)
