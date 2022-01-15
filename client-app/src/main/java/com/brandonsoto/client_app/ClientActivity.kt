@@ -74,6 +74,7 @@ class ClientActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        Log.d(TAG, "onStop")
         super.onStop()
     }
 

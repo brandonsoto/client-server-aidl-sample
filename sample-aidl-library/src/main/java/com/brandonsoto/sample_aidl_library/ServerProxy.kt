@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.annotation.RequiresPermission
 import com.brandonsoto.sample_aidl_library.common.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.flow.*
 
 class ServerProxy(private val context: Context) {
@@ -94,15 +95,19 @@ class ServerProxy(private val context: Context) {
     @RequiresPermission(SERVER_PERMISSION)
     fun teardown() {
         Log.v(TAG, "teardown")
-        try {
-            synchronized(this) {
+        synchronized(this) {
+            try {
                 mServerService?.unregisterStatusListener(mServerStatusListener)
+            } catch (e: RemoteException) {
+                Log.e(TAG, "teardown: failed to unregister listener due to $e")
             }
-        } catch (e: RemoteException) {
-            Log.e(TAG, "teardown: failed to unregister listener due to $e")
+            try {
+                mEventChannel.close()
+            } catch (e: ClosedReceiveChannelException) {
+                Log.e(TAG, "teardown: failed to close event channel due to $e")
+            }
+            context.unbindService(mServiceConnection)
         }
-        mEventChannel.close()
-        context.unbindService(mServiceConnection)
     }
 
     companion object {
