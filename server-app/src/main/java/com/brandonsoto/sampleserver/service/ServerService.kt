@@ -65,6 +65,16 @@ class ServerService : Service() {
         return mService
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        Log.i(TAG, "onUnbind: $intent")
+        return super.onUnbind(intent)
+    }
+
+    override fun onRebind(intent: Intent?) {
+        Log.i(TAG, "onRebind: $intent")
+        super.onRebind(intent)
+    }
+
     override fun onCreate() {
         Log.i(TAG, "onCreate")
         super.onCreate()

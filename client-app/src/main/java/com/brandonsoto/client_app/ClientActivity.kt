@@ -10,6 +10,7 @@ import androidx.lifecycle.lifecycleScope
 import com.brandonsoto.sample_aidl_library.ServerData
 import com.brandonsoto.sample_aidl_library.ServerProxy
 import com.brandonsoto.sample_aidl_library.common.ServerEvent
+import kotlinx.coroutines.*
 
 class ClientActivity : AppCompatActivity() {
     companion object {
@@ -43,9 +44,14 @@ class ClientActivity : AppCompatActivity() {
             mServerProxy?.doSomething(data)
         }
 
+        var updateViewJob: Job? = null
+
         val listener = object : ServerProxy.Companion.ServerConnectionListener {
             override fun onServerConnected() {
-                lifecycleScope.launchWhenResumed {
+                runBlocking {
+                    updateViewJob?.cancelAndJoin()
+                }
+                updateViewJob = lifecycleScope.launchWhenResumed {
                     mServerProxy?.serverEvents?.collect {
                         mResultTextView.text = when (it) {
                             is ServerEvent.EventA -> {
@@ -60,10 +66,11 @@ class ClientActivity : AppCompatActivity() {
             }
 
             override fun onServerDisconnected() {
-                mResultTextView.text = "Server is not available"
+                mResultTextView.text = "Server disconnected"
             }
-
         }
+
+
         mServerProxy = ServerProxy.create(this, listener)
     }
 
@@ -93,9 +100,11 @@ class ClientActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy")
+        Log.d(TAG, "onDestroy: +")
+        Log.d(TAG, "onDestroy: proxy=$mServerProxy")
         mServerProxy?.teardown()
         super.onDestroy()
+        Log.d(TAG, "onDestroy: -")
     }
 }
 

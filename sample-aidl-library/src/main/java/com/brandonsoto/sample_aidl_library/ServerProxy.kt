@@ -2,6 +2,7 @@ package com.brandonsoto.sample_aidl_library
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Context.BIND_AUTO_CREATE
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
@@ -14,9 +15,8 @@ import com.brandonsoto.sample_aidl_library.common.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
-import java.lang.RuntimeException
-
-// TODO: incorporate Dependency Injection
+import kotlin.RuntimeException
+import kotlin.coroutines.CoroutineContext
 
 //class ServerProxy private constructor(
 class ServerProxy private constructor(
@@ -29,29 +29,25 @@ class ServerProxy private constructor(
 
     companion object {
         private val TAG = ServerProxy::class.java.simpleName
-        private val BINDER_POLLING_INTERVAL_MS = 50L
-        private val BINDER_POLLING_MAX_RETRY = 100
-        private val BIND_RETRY_MAX = 3 // CAR_SERVICE_BIND_MAX_RETRY
-        private val BIND_RETRY_INTERVAL_MS = 500L //   CAR_SERVICE_BIND_RETRY_INTERVAL_MS
+        private const val BINDER_POLLING_INTERVAL_MS = 50L
+        private const val BINDER_POLLING_MAX_RETRY = 100
+        private val SERVER_SERVICE_INTENT = Intent().apply {
+            component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
+        }
 
         interface ServerConnectionListener {
             fun onServerConnected()
             fun onServerDisconnected()
         }
 
-        fun create(
-            context: Context,
-//            dispatcher: CoroutineDispatcher,
-//            scope: CoroutineScope,
-            listener: ServerConnectionListener
-        ): ServerProxy? {
-//            var started = false
+        @RequiresPermission(SERVER_PERMISSION)
+        fun create(context: Context, listener: ServerConnectionListener): ServerProxy? {
+            val proxy = ServerProxy(context, listener)
 
             for (i in 0..BINDER_POLLING_MAX_RETRY) {
-//                val proxy = ServerProxy(context, dispatcher, scope, listener)
-                val proxy = ServerProxy(context, listener)
-                val isBound = proxy.setupNew()
+                Log.v(TAG, "create: bind attempt ${i + 1}")
 
+                val isBound = proxy.bindToServer()
                 if (isBound) {
                     return proxy
                 }
@@ -59,35 +55,15 @@ class ServerProxy private constructor(
                 try {
                     Thread.sleep(BINDER_POLLING_INTERVAL_MS)
                 } catch (e: InterruptedException) {
-                    Log.e(TAG, "create: interrupted while binding to service")
+                    Log.e(TAG, "interrupted while binding to service")
+                    proxy.teardown()
                     return null
                 }
-
-//                if (proxy == null) {
-//                    proxy = ServerProxy(context, dispatcher, scope, listener)
-//                }
-
-//                if (service != null) {
-//                    if (!started) {
-//                        proxy.setupNew()
-//                        return proxy
-//                    }
-//                    break
-//                }
-
-//                if (!started) {
-//                    proxy.setupNew()
-//                    started = true
-//                }
             }
 
-            Log.e(TAG, "cannot bind to service! Waited for service " +
-                    "interval=$BINDER_POLLING_INTERVAL_MS(ms)," +
-                    "retries=$BINDER_POLLING_MAX_RETRY"
-            )
-
+            proxy.teardown()
+            Log.e(TAG, "Failed to bind service. Exhausted all retries.")
             return null
-
         }
     }
 
@@ -97,9 +73,6 @@ class ServerProxy private constructor(
 
     @GuardedBy("mLock")
     private var mBound = false
-
-    @GuardedBy("mLock")
-    private val mRetryJobs = mutableListOf<Job>()
 
     @GuardedBy("mLock")
     private var mBindRetryCount: Int = 0;
@@ -115,16 +88,18 @@ class ServerProxy private constructor(
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             Log.d(TAG, "onServiceConnected: name=$name, service=$service")
             synchronized(mLock) {
-                val serverService = IServer.Stub.asInterface(service)
-
-                if (serverService == null) {
-                    Log.wtf(TAG, "onServiceConnected: binder service is null")
-                    return
-                } else if (serverService.asBinder() == mServerService?.asBinder()) {
-                    Log.v(TAG, "onServiceConnected: binder already connected")
+                if (mServerService != null) {
+                    Log.w(TAG, "onServiceConnected: binder already connected")
                     return
                 }
 
+                val serverService = IServer.Stub.asInterface(service)
+                if (serverService == null) {
+                    Log.e(TAG, "onServiceConnected: binder service is null")
+                    return
+                }
+
+                mBound = true
                 mServerService = serverService.apply {
                     registerStatusListener(mServerStatusListener)
                 }
@@ -137,7 +112,7 @@ class ServerProxy private constructor(
             Log.d(TAG, "onServiceDisconnected: name=$name")
             synchronized(mLock) {
                 if (mServerService == null) {
-                    Log.wtf(TAG, "onServiceDisconnected: binder already disconnected")
+                    Log.w(TAG, "onServiceDisconnected: binder already disconnected")
                     return
                 }
 
@@ -180,79 +155,6 @@ class ServerProxy private constructor(
     }
 
     /**
-     * Initializes this proxy's connection to the server.
-     *
-     * @return true if the service was successfully bound to; otherwise false
-     */
-    @RequiresPermission(SERVER_PERMISSION)
-    fun setup(): Boolean {
-        synchronized(mLock) {
-            return if (mServerService == null) {
-                val intent = Intent().apply {
-                    component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
-                }
-                val result = context.bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE)
-                Log.d(TAG, "setup: bindService result: $result")
-                result
-            } else {
-                Log.d(TAG, "setup: service is already bound")
-                true
-            }
-        }
-    }
-
-    // TODO: clean up
-    fun setupNew(): Boolean {
-        val intent = Intent().apply {
-//            component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
-            component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
-        }
-
-        synchronized(mLock) {
-            if (mBound) {
-                return true
-            }
-
-            val isBound = context.bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE)
-            if (!isBound) {
-                return false
-//                if (mBindRetryCount < BIND_RETRY_MAX) {
-//                    mBindRetryCount++
-//                    Log.w(TAG, "setupNew: failed to bind! Retrying... (attempt=$mBindRetryCount)")
-//                    val job = scope.launch { withContext(dispatcher) {
-//                        delay(BIND_RETRY_INTERVAL_MS)
-//                        setupNew()
-//                    }}
-//                    job.invokeOnCompletion {
-//                        synchronized(mLock) {
-//                            mRetryJobs.remove(job)
-//                        }
-//                    }
-//                    mRetryJobs.add(job)
-//                } else {
-//                    Log.w(TAG, "setupNew: failed to bind! Exhausted all retries. Try again later.")
-//                    scope.launch {
-//                        withContext(Dispatchers.Main) {
-//                            synchronized(mLock) {
-//                                connectionListener.onServerDisconnected()
-//                            }
-//                        }
-//                    }
-//                }
-            } else {
-                Log.d(TAG, "setupNew: successfully bound to service")
-//                mRetryJobs.apply {
-//                    forEach { it.cancel() }
-//                    clear()
-//                }
-                mBindRetryCount = 0
-                mBound = true
-                return true
-            }
-        }
-    }
-
-    /**
      * Tears down this manager's resources.
      *
      * Note: This manager can no longer send or receive events to the Server service once this
@@ -267,30 +169,46 @@ class ServerProxy private constructor(
             } catch (e: RemoteException) {
                 Log.e(TAG, "teardown: failed to unregister listener due to $e")
             }
+
             try {
                 mEventChannel.close()
             } catch (e: ClosedReceiveChannelException) {
                 Log.e(TAG, "teardown: failed to close event channel due to $e")
             }
+
             context.unbindService(mServiceConnection)
+            mServerService = null
+            mBound = false
         }
     }
 
     fun isConnected(): Boolean {
-        return synchronized(mLock) {
-            mServerService != null
+        synchronized(mLock) {
+            return mServerService != null
+        }
+    }
+
+    private fun bindToServer(): Boolean {
+        synchronized(mLock) {
+            if (mBound) {
+                return true
+            }
+
+            mBound = context.bindService(SERVER_SERVICE_INTENT, mServiceConnection, BIND_AUTO_CREATE)
+            Log.v(TAG, "bound to service: $mBound")
+            return mBound
         }
     }
 
     private inner class ServerStatusListenerImpl: IServerStatusListener.Stub() {
         override fun onSuccess(data: ServerData?) {
-            Log.d(TAG, "onSuccess: data=$data")
+            Log.i(TAG, "onSuccess: data=$data")
             data?.let { mEventChannel.sendAndLogResult(ServerEvent.EventA(it)) }
         }
 
         override fun onFailure(data: ServerData?, errorCode: Int) {
             val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
-            Log.d(TAG, "onFailure: data=$data, errorCode=$errorCode, error=$error")
+            Log.e(TAG, "onFailure: data=$data, errorCode=$errorCode, error=$error")
             data?.let { mEventChannel.sendAndLogResult(ServerEvent.EventA(it, error)) }
         }
 
