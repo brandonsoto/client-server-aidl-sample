@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Server App</string>
+    <string name="app_desc">I am the server</string>
+</resources>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.brandonsoto.sample_aidl_library">
+
+    <!--        android:protectionLevel="signature|privileged"-->
+    <permission
+        android:name="com.brandonsoto.permission.SAMPLE_AIDL_INTERFACE"
+        android:protectionLevel="normal" />
+
+    <application>
+<!--        <activity-->
+<!--            android:name=".ui.SampleLibraryActivity"-->
+<!--            android:launchMode="singleTask"-->
+<!--            android:exported="true" />-->
+    </application>
+
+</manifest>
