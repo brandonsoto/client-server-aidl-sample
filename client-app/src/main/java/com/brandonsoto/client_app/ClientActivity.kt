@@ -1,5 +1,6 @@
 package com.brandonsoto.client_app
 
+import android.annotation.SuppressLint
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
@@ -20,7 +21,7 @@ class ClientActivity : AppCompatActivity() {
         s = ""
         i = 0
     }
-    private lateinit var mServerProxy: ServerProxy
+    private var mServerProxy: ServerProxy? = null
     private lateinit var mResultTextView: TextView
     private lateinit var mButton: Button
 
@@ -39,23 +40,31 @@ class ClientActivity : AppCompatActivity() {
                 i = count
             }
             mServerData = data
-            mServerProxy.doSomething(data)
+            mServerProxy?.doSomething(data)
         }
 
-        mServerProxy = ServerProxy(this)
-        mServerProxy.setup()
-        lifecycleScope.launchWhenResumed {
-            mServerProxy.serverEvents.collect {
-                mResultTextView.text = when (it) {
-                    is ServerEvent.EventA -> {
-                        "EventA(data=${it.data.asString()}, error=${it.error})"
-                    }
-                    else -> {
-                        "Unknown Type"
+        val listener = object : ServerProxy.Companion.ServerConnectionListener {
+            override fun onServerConnected() {
+                lifecycleScope.launchWhenResumed {
+                    mServerProxy?.serverEvents?.collect {
+                        mResultTextView.text = when (it) {
+                            is ServerEvent.EventA -> {
+                                "EventA(data=${it.data.asString()}, error=${it.error})"
+                            }
+                            else -> {
+                                "Unknown Type"
+                            }
+                        }
                     }
                 }
             }
+
+            override fun onServerDisconnected() {
+                mResultTextView.text = "Server is not available"
+            }
+
         }
+        mServerProxy = ServerProxy.create(this, listener)
     }
 
     override fun onStart() {
@@ -85,7 +94,7 @@ class ClientActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
-        mServerProxy.teardown()
+        mServerProxy?.teardown()
         super.onDestroy()
     }
 }
