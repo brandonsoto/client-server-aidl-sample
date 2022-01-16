@@ -1,6 +1,8 @@
 package com.brandonsoto.client_app
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 import android.widget.Button
 import android.widget.TextView
@@ -10,7 +12,11 @@ import com.brandonsoto.sample_aidl_library.ServerData
 import com.brandonsoto.sample_aidl_library.ServerProxy
 import com.brandonsoto.sample_aidl_library.common.ServerEvent
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collectLatest
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
 
+@ExperimentalCoroutinesApi
 class ClientActivity : AppCompatActivity() {
     companion object {
         private val TAG = ClientActivity::class.java.simpleName
@@ -24,11 +30,47 @@ class ClientActivity : AppCompatActivity() {
     private var mServerProxy: ServerProxy? = null
     private lateinit var mResultTextView: TextView
     private lateinit var mButton: Button
+    private var mHandler = HandlerThread("server_event_thread")
+    private val eventDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val eventScope = CoroutineScope(lifecycleScope.coroutineContext + eventDispatcher)
+//    private val eventScopeB = CoroutineScope(lifecycleScope.newCoroutineContext(eventDispatcher))
+//    private lateinit var eventScopeB: CoroutineScope
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.d(TAG, "onCreate")
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_client)
+//        eventScopeB = CoroutineScope(lifecycleScope.coroutineContext.plus(eventDispatcher))
+
+        lifecycleScope.launch {
+            Log.i(
+                TAG,
+                "onCreate: TEST DISPATCHER (unchanged): ${Thread.currentThread()}"
+            )
+        }
+
+        lifecycleScope.launch(eventDispatcher) {
+            Log.i(
+                TAG,
+                "onCreate: TEST DISPATCHER: (lifecycle.launch(eventDispatcher)) ${Thread.currentThread()}"
+            )
+        }
+
+        eventScope.launch {
+            Log.i(
+                TAG,
+                "onCreate: TEST DISPATCHER: (eventScope.launch) ${Thread.currentThread()}"
+            )
+        }
+//
+//        eventScopeB.launch {
+//            Log.i(
+//                TAG,
+//                "onCreate: TEST DISPATCHER3: ${Thread.currentThread()}"
+//            )
+//        }
+
+        mHandler.start()
 
         mResultTextView = findViewById(R.id.result_text)
         mButton = findViewById(R.id.button)
@@ -44,50 +86,49 @@ class ClientActivity : AppCompatActivity() {
         }
 
 //        var updateViewJob: Job? = null
+        var mJob: Job? = null
 
         val listener = object : ServerProxy.Companion.ServerEventListener {
             override fun onServerConnected() {
-                mResultTextView.text = "Server connected!"
-//                runBlocking {
-//                    updateViewJob?.cancelAndJoin()
-//                }
-//                updateViewJob = lifecycleScope.launchWhenResumed {
-//                    mServerProxy?.serverEvents?.collect {
-//                        mResultTextView.text = when (it) {
-//                            is ServerEvent.EventA -> {
-//                                "EventA(data=${it.data.asString()}, error=${it.error})"
-//                            }
-//                            else -> {
-//                                "Unknown Type"
-//                            }
-//                        }
-//                    }
-//                }
+                Log.d(TAG, "onServerConnected: ${Thread.currentThread()}")
+                lifecycleScope.launchWhenStarted { mResultTextView.text = "Server Connected" }
             }
 
             override fun onServerDisconnected() {
-                mResultTextView.text = "Server disconnected"
+                Log.d(TAG, "onServerDisconnected: ${Thread.currentThread()}")
+                lifecycleScope.launchWhenStarted { withContext(Dispatchers.Main) {
+                        mResultTextView.text = "Server Disconnected"
+                } }
             }
 
+            // TODO: should this include proxy as param?
             override fun onServerConnectedAndReady() {
-                mResultTextView.text = "Server connected and ready!"
+                Log.d(TAG, "onServerConnectedAndReady: ${Thread.currentThread()}")
+                lifecycleScope.launchWhenStarted { withContext(Dispatchers.Main) {
+                    mResultTextView.text = "Server connected and ready!"
+                } }
             }
 
             override fun onServerEvent(event: ServerEvent) {
-                mResultTextView.text = when (event) {
-                    is ServerEvent.Success,
-                    is ServerEvent.Failure -> {
-                        event.toString()
-                    }
-                    else -> {
-                        "Unknown event"
+                Log.d(TAG, "onServerEvent: $event, ${Thread.currentThread()}")
+                lifecycleScope.launchWhenStarted {
+                    withContext(Dispatchers.Main) {
+                        mResultTextView.text = when (event) {
+                            is ServerEvent.Success,
+                            is ServerEvent.Failure -> {
+                                event.toString()
+                            }
+                            else -> {
+                                "Unknown event"
+                            }
+                        }
                     }
                 }
             }
         }
 
-
-        mServerProxy = ServerProxy.create(this, listener)
+//        mServerProxy = ServerProxy.create(this, Handler(mHandler.looper), listener)
+        mServerProxy = ServerProxy.create(this, eventScope, Handler(mHandler.looper), listener)
     }
 
     override fun onStart() {
@@ -116,6 +157,7 @@ class ClientActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        mHandler.quitSafely()
         Log.d(TAG, "onDestroy: +")
         Log.d(TAG, "onDestroy: proxy=$mServerProxy")
         mServerProxy?.teardown()
