@@ -6,27 +6,20 @@ import android.content.Context.BIND_AUTO_CREATE
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.Handler
 import android.os.RemoteException
 import android.util.Log
 import androidx.annotation.GuardedBy
 import androidx.annotation.RequiresPermission
-import androidx.lifecycle.LifecycleCoroutineScope
 import com.brandonsoto.sample_aidl_library.common.*
-import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
-import kotlin.RuntimeException
-import kotlin.coroutines.CoroutineContext
 
-//class ServerProxy private constructor(
 class ServerProxy private constructor(
     private val context: Context,
-//    private val dispatcher: CoroutineDispatcher,
-//    private val scope: CoroutineScope,
-    private val connectionListener: ServerConnectionListener
+    private val handler: Handler, // ServiceConnectionListener callbacks will be called here
+    private val eventListener: ServerEventListener
 ) {
-
-
     companion object {
         private val TAG = ServerProxy::class.java.simpleName
         private const val BINDER_POLLING_INTERVAL_MS = 50L
@@ -35,14 +28,21 @@ class ServerProxy private constructor(
             component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
         }
 
-        interface ServerConnectionListener {
+        interface ServerEventListener {
             fun onServerConnected()
             fun onServerDisconnected()
+            fun onServerConnectedAndReady()
+            fun onServerEvent(event: ServerEvent)
         }
 
         @RequiresPermission(SERVER_PERMISSION)
-        fun create(context: Context, listener: ServerConnectionListener): ServerProxy? {
-            val proxy = ServerProxy(context, listener)
+        fun create(context: Context, listener: ServerEventListener): ServerProxy? {
+            return create(context, Handler(context.mainLooper), listener)
+        }
+
+        @RequiresPermission(SERVER_PERMISSION)
+        fun create(context: Context, handler: Handler, listener: ServerEventListener): ServerProxy? {
+            val proxy = ServerProxy(context, handler, listener)
 
             for (i in 0..BINDER_POLLING_MAX_RETRY) {
                 Log.v(TAG, "create: bind attempt ${i + 1}")
@@ -67,7 +67,7 @@ class ServerProxy private constructor(
         }
     }
 
-    private val mEventChannel = Channel<ServerEvent>(Channel.RENDEZVOUS)
+//    private val mEventChannel = Channel<ServerEvent>(Channel.RENDEZVOUS)
 
     private val mLock = Any()
 
@@ -75,7 +75,7 @@ class ServerProxy private constructor(
     private var mBound = false
 
     @GuardedBy("mLock")
-    private var mBindRetryCount: Int = 0;
+    private var mServerReady = false // TODO: replace this with server state once we use state machine
 
     @GuardedBy("mLock")
     private var mServerService: IServer? = null
@@ -105,7 +105,7 @@ class ServerProxy private constructor(
                 }
             }
 
-            connectionListener.onServerConnected()
+            eventListener.onServerConnected()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -116,18 +116,18 @@ class ServerProxy private constructor(
                     return
                 }
 
-                mBindRetryCount = 0
+                mServerReady = false
                 mServerService = null
                 mBound = false
             }
 
-            connectionListener.onServerDisconnected()
+            eventListener.onServerDisconnected()
         }
 
     }
 
-    @RequiresPermission(SERVER_PERMISSION)
-    val serverEvents: Flow<ServerEvent> = mEventChannel.consumeAsFlow()
+//    @RequiresPermission(SERVER_PERMISSION)
+//    val serverEvents: Flow<ServerEvent> = mEventChannel.consumeAsFlow()
 
     /**
      * Sends a Server request for [data]. Listen for the result of the connect request
@@ -170,11 +170,11 @@ class ServerProxy private constructor(
                 Log.e(TAG, "teardown: failed to unregister listener due to $e")
             }
 
-            try {
-                mEventChannel.close()
-            } catch (e: ClosedReceiveChannelException) {
-                Log.e(TAG, "teardown: failed to close event channel due to $e")
-            }
+//            try {
+//                mEventChannel.close()
+//            } catch (e: ClosedReceiveChannelException) {
+//                Log.e(TAG, "teardown: failed to close event channel due to $e")
+//            }
 
             context.unbindService(mServiceConnection)
             mServerService = null
@@ -185,6 +185,12 @@ class ServerProxy private constructor(
     fun isConnected(): Boolean {
         synchronized(mLock) {
             return mServerService != null
+        }
+    }
+
+    fun isServerReady(): Boolean {
+        synchronized(mLock) {
+            return mServerReady
         }
     }
 
@@ -202,21 +208,32 @@ class ServerProxy private constructor(
 
     private inner class ServerStatusListenerImpl: IServerStatusListener.Stub() {
         override fun onSuccess(data: ServerData?) {
-            Log.i(TAG, "onSuccess: data=$data")
-            data?.let { mEventChannel.sendAndLogResult(ServerEvent.EventA(it)) }
+            Log.i(TAG, "onSuccess: data=${data?.asString()}")
+//            data?.let { mEventChannel.sendAndLogResult(ServerEvent.EventA(it)) }
+            data?.let { handler.post { eventListener.onServerEvent(ServerEvent.Success(it)) } }
         }
 
         override fun onFailure(data: ServerData?, errorCode: Int) {
             val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
-            Log.e(TAG, "onFailure: data=$data, errorCode=$errorCode, error=$error")
-            data?.let { mEventChannel.sendAndLogResult(ServerEvent.EventA(it, error)) }
+            Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, error=$error")
+//            data?.let { mEventChannel.sendAndLogResult(ServerEvent.EventA(it, error)) }
+            data?.let { handler.post { eventListener.onServerEvent(ServerEvent.Failure(it, error)) } }
         }
 
-        private fun Channel<ServerEvent>.sendAndLogResult(event: ServerEvent) {
-            trySend(event)
-                .onSuccess { Log.v(TAG, "Successfully sent $event") }
-                .onFailure { Log.e(TAG, "Failed to send $event: error=$it") }
-                .onClosed { Log.e(TAG, "Failed to send $event as channel is closed") }
+        override fun onServerReady() {
+            Log.i(TAG, "onServerReady")
+            handler.post { eventListener.onServerConnectedAndReady() }
         }
+
+//        private fun Channel<ServerEvent>.sendAndLogResult(event: ServerEvent) {
+//            trySend(event)
+//                .onSuccess { Log.v(TAG, "Successfully sent $event") }
+//                .onFailure { Log.e(TAG, "Failed to send $event: error=$it") }
+//                .onClosed { Log.e(TAG, "Failed to send $event as channel is closed") }
+//        }
     }
+}
+
+private fun ServerData.asString(): String {
+    return "ServerData(b=$b, s=$s, i=$i)"
 }

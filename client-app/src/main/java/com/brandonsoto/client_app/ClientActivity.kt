@@ -1,11 +1,10 @@
 package com.brandonsoto.client_app
 
-import android.annotation.SuppressLint
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
 import android.widget.Button
 import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.brandonsoto.sample_aidl_library.ServerData
 import com.brandonsoto.sample_aidl_library.ServerProxy
@@ -44,29 +43,46 @@ class ClientActivity : AppCompatActivity() {
             mServerProxy?.doSomething(data)
         }
 
-        var updateViewJob: Job? = null
+//        var updateViewJob: Job? = null
 
-        val listener = object : ServerProxy.Companion.ServerConnectionListener {
+        val listener = object : ServerProxy.Companion.ServerEventListener {
             override fun onServerConnected() {
-                runBlocking {
-                    updateViewJob?.cancelAndJoin()
-                }
-                updateViewJob = lifecycleScope.launchWhenResumed {
-                    mServerProxy?.serverEvents?.collect {
-                        mResultTextView.text = when (it) {
-                            is ServerEvent.EventA -> {
-                                "EventA(data=${it.data.asString()}, error=${it.error})"
-                            }
-                            else -> {
-                                "Unknown Type"
-                            }
-                        }
-                    }
-                }
+                mResultTextView.text = "Server connected!"
+//                runBlocking {
+//                    updateViewJob?.cancelAndJoin()
+//                }
+//                updateViewJob = lifecycleScope.launchWhenResumed {
+//                    mServerProxy?.serverEvents?.collect {
+//                        mResultTextView.text = when (it) {
+//                            is ServerEvent.EventA -> {
+//                                "EventA(data=${it.data.asString()}, error=${it.error})"
+//                            }
+//                            else -> {
+//                                "Unknown Type"
+//                            }
+//                        }
+//                    }
+//                }
             }
 
             override fun onServerDisconnected() {
                 mResultTextView.text = "Server disconnected"
+            }
+
+            override fun onServerConnectedAndReady() {
+                mResultTextView.text = "Server connected and ready!"
+            }
+
+            override fun onServerEvent(event: ServerEvent) {
+                mResultTextView.text = when (event) {
+                    is ServerEvent.Success,
+                    is ServerEvent.Failure -> {
+                        event.toString()
+                    }
+                    else -> {
+                        "Unknown event"
+                    }
+                }
             }
         }
 
@@ -106,8 +122,4 @@ class ClientActivity : AppCompatActivity() {
         super.onDestroy()
         Log.d(TAG, "onDestroy: -")
     }
-}
-
-private fun ServerData.asString(): String {
-    return "ServerData(b=$b, s=$s, i=$i)"
 }

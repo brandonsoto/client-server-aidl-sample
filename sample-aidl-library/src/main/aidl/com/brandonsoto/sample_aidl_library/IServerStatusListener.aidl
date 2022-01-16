@@ -9,4 +9,5 @@ import com.brandonsoto.sample_aidl_library.IServerStatusListener;
 oneway interface IServerStatusListener {
     void onSuccess(in ServerData data) = 0;
     void onFailure(in ServerData data, in int errorCode) = 1;
+    void onServerReady() = 2;
 }
