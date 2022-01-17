@@ -99,6 +99,7 @@ class ServerService : LifecycleService() {
 
     override fun onBind(intent: Intent): IBinder {
         Log.i(TAG, "onBind: $intent")
+        super.onBind(intent)
         return mService
     }
 
