@@ -6,17 +6,21 @@ import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.RemoteException
 import android.util.Log
+import androidx.lifecycle.*
 import com.brandonsoto.sample_aidl_library.IServer
 import com.brandonsoto.sample_aidl_library.IServerStatusListener
 import com.brandonsoto.sample_aidl_library.ServerData
 import com.brandonsoto.sample_aidl_library.common.BinderInterfaceContainer
 import com.brandonsoto.sample_aidl_library.common.SERVER_PERMISSION
 import com.brandonsoto.sample_aidl_library.common.ServerError
-import com.brandonsoto.sample_aidl_library.common.ServerEvent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.FileDescriptor
 import java.io.PrintWriter
 
-class ServerService : Service() {
+class ServerService : LifecycleService() {
     companion object {
         private val TAG = ServerService::class.java.simpleName
         private enum class ServerState { Stopped, Running }
@@ -34,19 +38,29 @@ class ServerService : Service() {
          * @throws SecurityException on permission
          */
         override fun doSomething(data: ServerData?) {
-            Log.i(TAG, "doSomething: $data")
+            Log.i(TAG, "doSomething: $data, ${Thread.currentThread()}")
             assertServicePermission()
-            mStatusListeners.interfaces.forEach { listener ->
-                try {
-                    if (data?.b == true) {
-                        listener.binderInterface.onSuccess(data)
-                    } else {
-                        listener.binderInterface.onFailure(data, ServerError.GENERIC.ordinal)
+            val j = this@ServerService.lifecycleScope.launch {
+                Log.i(TAG, "doSomething: before withContext")
+                withContext(Dispatchers.Main) {
+                    Log.i(TAG, "doSomething: coroutine delay started")
+                    delay(500)
+                    Log.i(TAG, "doSomething: coroutine delay ended")
+                    mStatusListeners.interfaces.forEach { listener ->
+                        try {
+                            if (data?.b == true) {
+                                listener.binderInterface.onSuccess(data)
+                            } else {
+                                listener.binderInterface.onFailure(data, ServerError.GENERIC.ordinal)
+                            }
+                        } catch (e: RemoteException) {
+                            Log.e(TAG, "doSomething: Error calling status listener")
+                        }
                     }
-                } catch (e: RemoteException) {
-                    Log.e(TAG, "doSomething: Error calling status listener")
                 }
             }
+
+            Log.d(TAG, "doSomething: job=$j")
         }
 
         /**

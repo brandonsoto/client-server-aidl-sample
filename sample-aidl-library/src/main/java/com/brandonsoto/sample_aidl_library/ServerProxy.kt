@@ -16,6 +16,7 @@ import com.brandonsoto.sample_aidl_library.common.*
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -44,13 +45,38 @@ class ServerProxy private constructor(
 //        fun create(context: Context, listener: ServerEventListener): ServerProxy? {
 //            return create(context, Handler(context.mainLooper), listener)
 //        }
+    @RequiresPermission(SERVER_PERMISSION)
+    suspend fun createSuspend(context: Context, scope: CoroutineScope, handler: Handler, listener: ServerEventListener): ServerProxy? {
+        val proxy = ServerProxy(context, scope, handler, listener)
+
+        for (i in 0..BINDER_POLLING_MAX_RETRY) {
+            Log.v(TAG, "create: bind attempt ${i + 1}, ${Thread.currentThread()}")
+
+            val isBound = proxy.bindToServer()
+            if (isBound) {
+                return proxy
+            }
+
+            try {
+                delay(BINDER_POLLING_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                Log.e(TAG, "interrupted while binding to service, ${Thread.currentThread()}")
+                proxy.teardown()
+                return null
+            }
+        }
+
+        proxy.teardown()
+        Log.e(TAG, "Failed to bind service. Exhausted all retries. ${Thread.currentThread()}")
+        return null
+    }
 
         @RequiresPermission(SERVER_PERMISSION)
         fun create(context: Context, scope: CoroutineScope, handler: Handler, listener: ServerEventListener): ServerProxy? {
             val proxy = ServerProxy(context, scope, handler, listener)
 
             for (i in 0..BINDER_POLLING_MAX_RETRY) {
-                Log.v(TAG, "create: bind attempt ${i + 1}")
+                Log.v(TAG, "create: bind attempt ${i + 1}, ${Thread.currentThread()}")
 
                 val isBound = proxy.bindToServer()
                 if (isBound) {
@@ -60,14 +86,14 @@ class ServerProxy private constructor(
                 try {
                     Thread.sleep(BINDER_POLLING_INTERVAL_MS)
                 } catch (e: InterruptedException) {
-                    Log.e(TAG, "interrupted while binding to service")
+                    Log.e(TAG, "interrupted while binding to service, ${Thread.currentThread()}")
                     proxy.teardown()
                     return null
                 }
             }
 
             proxy.teardown()
-            Log.e(TAG, "Failed to bind service. Exhausted all retries.")
+            Log.e(TAG, "Failed to bind service. Exhausted all retries. ${Thread.currentThread()}")
             return null
         }
 
@@ -135,10 +161,10 @@ class ServerProxy private constructor(
 
                 mBound = true
                 mServerService = serverService.apply {
-//                    handler.post { eventListener.onServerConnected() }
-                    scope.launch {
-                        eventListener.onServerConnected()
-                    }
+                    handler.post { eventListener.onServerConnected() }
+//                    scope.launch {
+//                        eventListener.onServerConnected()
+//                    }
                     registerStatusListener(mServerStatusListener)
                 }
             }
@@ -159,10 +185,10 @@ class ServerProxy private constructor(
                 mBound = false
             }
 
-//            handler.post { eventListener.onServerDisconnected() }
-            scope.launch {
-                eventListener.onServerDisconnected()
-            }
+            handler.post { eventListener.onServerDisconnected() }
+//            scope.launch {
+//                eventListener.onServerDisconnected()
+//            }
 //            mServerState.value = false
         }
 
@@ -204,7 +230,7 @@ class ServerProxy private constructor(
      */
     @RequiresPermission(SERVER_PERMISSION)
     fun teardown() {
-        Log.v(TAG, "teardown")
+        Log.v(TAG, "teardown: ${Thread.currentThread()}")
         synchronized(mLock) {
             try {
                 mServerService?.unregisterStatusListener(mServerStatusListener)
@@ -230,6 +256,8 @@ class ServerProxy private constructor(
         }
     }
 
+    fun isNotConnected(): Boolean = !isConnected()
+
     fun isServerReady(): Boolean {
         synchronized(mLock) {
             return mServerReady
@@ -239,11 +267,12 @@ class ServerProxy private constructor(
     private fun bindToServer(): Boolean {
         synchronized(mLock) {
             if (mBound) {
+                Log.v(TAG, "bindToService: already bound to service")
                 return true
             }
 
             mBound = context.bindService(SERVER_SERVICE_INTENT, mServiceConnection, BIND_AUTO_CREATE)
-            Log.v(TAG, "bound to service: $mBound")
+            Log.v(TAG, "bindToService: bound = $mBound")
             return mBound
         }
     }
@@ -252,10 +281,10 @@ class ServerProxy private constructor(
         override fun onSuccess(data: ServerData?) {
             Log.i(TAG, "onSuccess: data=${data?.asString()}, ${Thread.currentThread()}")
             data?.let {
-//                handler.post { eventListener.onServerEvent(ServerEvent.Success(it)) }
-                scope.launch {
-                    eventListener.onServerEvent(ServerEvent.Success(it))
-                }
+                handler.post { eventListener.onServerEvent(ServerEvent.Success(it)) }
+//                scope.launch {
+//                    eventListener.onServerEvent(ServerEvent.Success(it))
+//                }
 //                mEventChannel.trySend(ServerEvent.Success(it))
             }
         }
@@ -264,20 +293,20 @@ class ServerProxy private constructor(
             val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
             Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
             data?.let {
-//                handler.post { eventListener.onServerEvent(ServerEvent.Failure(it, error)) }
-                scope.launch {
-                    eventListener.onServerEvent(ServerEvent.Failure(it, error))
-                }
+                handler.post { eventListener.onServerEvent(ServerEvent.Failure(it, error)) }
+//                scope.launch {
+//                    eventListener.onServerEvent(ServerEvent.Failure(it, error))
+//                }
 //                mEventChannel.trySend(ServerEvent.Failure(it, error))
             }
         }
 
         override fun onServerReady() {
             Log.i(TAG, "onServerReady: ${Thread.currentThread()}")
-//            handler.post { eventListener.onServerConnectedAndReady() }
-            scope.launch {
-                eventListener.onServerConnectedAndReady()
-            }
+            handler.post { eventListener.onServerConnectedAndReady() }
+//            scope.launch {
+//                eventListener.onServerConnectedAndReady()
+//            }
         }
 
 //        private fun Channel<ServerEvent>.sendAndLogResult(event: ServerEvent) {
