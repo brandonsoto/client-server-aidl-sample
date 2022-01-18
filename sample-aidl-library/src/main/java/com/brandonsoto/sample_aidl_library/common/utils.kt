@@ -9,3 +9,6 @@ package com.brandonsoto.sample_aidl_library.common
 inline fun <reified T : Enum<T>> Int?.asEnumOrDefault(defaultValue: T): T {
     return enumValues<T>().firstOrNull { it.ordinal == this } ?: defaultValue
 }
+
+enum class ServerState { Disconnected, Connected, Ready }
+

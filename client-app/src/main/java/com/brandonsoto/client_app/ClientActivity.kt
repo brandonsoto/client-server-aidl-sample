@@ -1,9 +1,9 @@
 package com.brandonsoto.client_app
 
+import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Looper
 import android.util.Log
 import android.widget.Button
 import android.widget.TextView
@@ -12,8 +12,8 @@ import androidx.lifecycle.lifecycleScope
 import com.brandonsoto.sample_aidl_library.ServerData
 import com.brandonsoto.sample_aidl_library.ServerProxy
 import com.brandonsoto.sample_aidl_library.common.ServerEvent
+import com.brandonsoto.sample_aidl_library.common.ServerState
 import kotlinx.coroutines.*
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -35,8 +35,6 @@ class ClientActivity : AppCompatActivity() {
     private lateinit var mHandler: Handler
     private val eventDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val eventScope = CoroutineScope(lifecycleScope.coroutineContext + eventDispatcher)
-//    private val eventScopeB = CoroutineScope(lifecycleScope.newCoroutineContext(eventDispatcher))
-//    private lateinit var eventScopeB: CoroutineScope
     private var mCreateJob: Job? = null
     private val mReadyFlag = AtomicBoolean(false)
 
@@ -48,9 +46,8 @@ class ClientActivity : AppCompatActivity() {
                     repeat(25) {
                         val attempt = it + 1
                         Log.d(TAG, "createProxy: attempt: $attempt, ${Thread.currentThread()}")
-                        val p = ServerProxy.createSuspend(
+                        val p = ServerProxy.create(
                             this@ClientActivity,
-                            eventScope,
                             mHandler,
                             listener
                         )
@@ -78,7 +75,31 @@ class ClientActivity : AppCompatActivity() {
                 }
 
                 Log.d(TAG, "createProxy: after 30 second withTimeoutOrNull. proxy=$proxy")
-                mServerProxy = proxy as? ServerProxy
+                mServerProxy = (proxy as? ServerProxy)?.apply {
+                    lifecycleScope.launchWhenStarted {
+                        this@apply.state.collect {
+                            mResultTextView.text = "Server is $it"
+
+                            when (it) {
+                                ServerState.Connected -> mResultTextView.setTextColor(Color.RED)
+                                ServerState.Disconnected -> mResultTextView.setTextColor(Color.YELLOW)
+                                ServerState.Ready -> mResultTextView.setTextColor(Color.GREEN)
+                            }
+                        }
+                    }
+
+                    lifecycleScope.launchWhenStarted {
+                        this@apply.events.collect {
+                            mResultTextView.text = "$it"
+
+                            when (it) {
+                                is ServerEvent.Success -> mResultTextView.setTextColor(Color.GREEN)
+                                is ServerEvent.Failure -> mResultTextView.setTextColor(Color.RED)
+                            }
+
+                        }
+                    }
+                }
             }
         }
     }
@@ -86,15 +107,16 @@ class ClientActivity : AppCompatActivity() {
     private val listener = object : ServerProxy.Companion.ServerEventListener {
         override fun onServerConnected() {
             Log.d(TAG, "onServerConnected: ${Thread.currentThread()}")
-            lifecycleScope.launchWhenStarted { mResultTextView.text = "Server Connected" }
+            lifecycleScope.launchWhenStarted {
+//                mResultTextView.text = "Server Connected"
+            }
         }
 
         override fun onServerDisconnected() {
             mReadyFlag.set(false)
             Log.d(TAG, "onServerDisconnected: ${Thread.currentThread()}")
             lifecycleScope.launchWhenStarted { withContext(Dispatchers.Main) {
-                mResultTextView.text = "Server Disconnected"
-//                delay(3_000)
+//                mResultTextView.text = "Server Disconnected"
                 createProxy()
             } }
         }
@@ -104,25 +126,25 @@ class ClientActivity : AppCompatActivity() {
             mReadyFlag.set(true)
             Log.d(TAG, "onServerConnectedAndReady: ${Thread.currentThread()}")
             lifecycleScope.launchWhenStarted { withContext(Dispatchers.Main) {
-                mResultTextView.text = "Server connected and ready!"
+//                mResultTextView.text = "Server connected and ready!"
             } }
         }
 
         override fun onServerEvent(event: ServerEvent) {
             Log.d(TAG, "onServerEvent: $event, ${Thread.currentThread()}")
-            lifecycleScope.launchWhenStarted {
-                withContext(Dispatchers.Main) {
-                    mResultTextView.text = when (event) {
-                        is ServerEvent.Success,
-                        is ServerEvent.Failure -> {
-                            event.toString()
-                        }
-                        else -> {
-                            "Unknown event"
-                        }
-                    }
-                }
-            }
+//            lifecycleScope.launchWhenStarted {
+//                withContext(Dispatchers.Main) {
+//                    mResultTextView.text = when (event) {
+//                        is ServerEvent.Success,
+//                        is ServerEvent.Failure -> {
+//                            event.toString()
+//                        }
+//                        else -> {
+//                            "Unknown event"
+//                        }
+//                    }
+//                }
+//            }
         }
     }
 
@@ -136,35 +158,6 @@ class ClientActivity : AppCompatActivity() {
             Log.d(TAG, "handler received $msg, ${Thread.currentThread()}")
             true
         }
-//        eventScopeB = CoroutineScope(lifecycleScope.coroutineContext.plus(eventDispatcher))
-
-        lifecycleScope.launch {
-            Log.i(
-                TAG,
-                "onCreate: TEST DISPATCHER (unchanged): ${Thread.currentThread()}"
-            )
-        }
-
-        lifecycleScope.launch(eventDispatcher) {
-            Log.i(
-                TAG,
-                "onCreate: TEST DISPATCHER: (lifecycle.launch(eventDispatcher)) ${Thread.currentThread()}"
-            )
-        }
-
-        eventScope.launch {
-            Log.i(
-                TAG,
-                "onCreate: TEST DISPATCHER: (eventScope.launch) ${Thread.currentThread()}"
-            )
-        }
-//
-//        eventScopeB.launch {
-//            Log.i(
-//                TAG,
-//                "onCreate: TEST DISPATCHER3: ${Thread.currentThread()}"
-//            )
-//        }
 
         mResultTextView = findViewById(R.id.result_text)
         mButton = findViewById(R.id.button)
