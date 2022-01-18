@@ -147,7 +147,7 @@ class ServerProxy private constructor(
             val deferredResult: Deferred<ServerEvent?> = async {
                 val replyEvent = eventFlow
                     .onSubscription {
-                        handler.post { synchronized(mLock) { mServerService?.doSomethingSuspended(data) } }
+                        launch { synchronized(mLock) { mServerService?.doSomethingSuspended(data) } }
                     }
                     .firstOrNull {
                         when (it) {
