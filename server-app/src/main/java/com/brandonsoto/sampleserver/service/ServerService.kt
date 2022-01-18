@@ -63,6 +63,32 @@ class ServerService : LifecycleService() {
             Log.d(TAG, "doSomething: job=$j")
         }
 
+        override fun doSomethingSuspended(data: ServerData?) {
+            Log.i(TAG, "doSomethingSuspended: $data, ${Thread.currentThread()}")
+            assertServicePermission()
+            val j = this@ServerService.lifecycleScope.launch {
+                Log.i(TAG, "doSomethingSuspended: before withContext")
+                withContext(Dispatchers.Main) {
+                    Log.i(TAG, "doSomethingSuspended: coroutine delay started")
+//                    delay(500)
+                    Log.i(TAG, "doSomethingSuspended: coroutine delay ended")
+                    mStatusListeners.interfaces.forEach { listener ->
+                        try {
+                            if (data?.b == true) {
+                                listener.binderInterface.onSuccess(data)
+                            } else {
+                                listener.binderInterface.onFailure(data, ServerError.GENERIC.ordinal)
+                            }
+                        } catch (e: RemoteException) {
+                            Log.e(TAG, "doSomethingSuspended: Error calling status listener")
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "doSomethingSuspended: job=$j")
+        }
+
         /**
          * TODO
          *

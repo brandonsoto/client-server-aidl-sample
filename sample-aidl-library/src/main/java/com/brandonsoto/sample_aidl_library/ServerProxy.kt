@@ -7,16 +7,19 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.Handler
+import android.os.Looper
 import android.os.RemoteException
 import android.util.Log
 import androidx.annotation.GuardedBy
 import androidx.annotation.RequiresPermission
 import com.brandonsoto.sample_aidl_library.common.*
+import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
 
 class ServerProxy private constructor(
     private val context: Context,
+    private val scope: CoroutineScope,
     private val handler: Handler, // ServiceEventListener callbacks will be called here
     private val eventListener: ServerEventListener
 ) {
@@ -35,8 +38,8 @@ class ServerProxy private constructor(
 
 
         @RequiresPermission(SERVER_PERMISSION)
-        fun create(context: Context, handler: Handler, listener: ServerEventListener): ServerProxy? {
-            val proxy = ServerProxy(context, handler, listener)
+        fun create(context: Context, scope: CoroutineScope, handler: Handler, listener: ServerEventListener): ServerProxy? {
+            val proxy = ServerProxy(context, scope, handler, listener)
             val isBound = proxy.bindToServer()
             if (isBound) {
                 return proxy
@@ -48,7 +51,13 @@ class ServerProxy private constructor(
     }
 
     private val mEventChannel = Channel<ServerEvent>(Channel.RENDEZVOUS)
-    val events: Flow<ServerEvent> = mEventChannel.receiveAsFlow()
+//    val events: Flow<ServerEvent> = mEventChannel.receiveAsFlow().shareIn(scope, SharingStarted.Eagerly, 10)
+//    private val mEventFlow = MutableSharedFlow<ServerEvent>(25)
+    private val mEventFlow = MutableSharedFlow<ServerEvent>()
+    val eventFlow: SharedFlow<ServerEvent> = mEventFlow
+//    val events: SharedFlow<ServerEvent> = mEventChannel.receiveAsFlow().shareIn(scope, SharingStarted.Eagerly, 10)
+//    val events: SharedFlow<ServerEvent> = mEventChannel.receiveAsFlow()
+//        .shareIn(scope, SharingStarted.Lazily)
 
     private val mState = MutableStateFlow<ServerState>(ServerState.Disconnected)
     val state: StateFlow<ServerState> = mState.asStateFlow()
@@ -82,7 +91,7 @@ class ServerProxy private constructor(
 
                 mBound = true
                 mServerService = serverService.apply {
-                    handler.post { eventListener.onServerConnected() }
+//                    handler.post { eventListener.onServerConnected() }
                     mState.value = ServerState.Connected
                     registerStatusListener(mServerStatusListener)
                 }
@@ -101,7 +110,7 @@ class ServerProxy private constructor(
                 mBound = false
             }
 
-            handler.post { eventListener.onServerDisconnected() }
+//            handler.post { eventListener.onServerDisconnected() }
             mState.value = ServerState.Disconnected
         }
 
@@ -130,6 +139,26 @@ class ServerProxy private constructor(
         }
 
         return false
+    }
+
+    suspend fun doSomethingSuspended(data: ServerData): ServerEvent? {
+        Log.v(TAG, "doSomethingSuspended: ${data.i}")
+        return withTimeoutOrNull(5_000L) {
+            val deferredResult: Deferred<ServerEvent?> = async {
+                val replyEvent = eventFlow
+                    .onSubscription {
+                        handler.post { synchronized(mLock) { mServerService?.doSomethingSuspended(data) } }
+                    }
+                    .firstOrNull {
+                        when (it) {
+                            is ServerEvent.Success -> data.i == it.data.i
+                            is ServerEvent.Failure -> data.i == it.data.i
+                        }
+                    }
+                return@async replyEvent
+            }
+            return@withTimeoutOrNull deferredResult.await()
+        }
     }
 
     /**
@@ -172,8 +201,13 @@ class ServerProxy private constructor(
         override fun onSuccess(data: ServerData?) {
             Log.i(TAG, "onSuccess: data=${data?.asString()}, ${Thread.currentThread()}")
             data?.let {
-                handler.post { eventListener.onServerEvent(ServerEvent.Success(it)) }
-                mEventChannel.trySend(ServerEvent.Success(it))
+//                handler.post { eventListener.onServerEvent(ServerEvent.Success(it)) }
+//                mEventChannel.trySend(ServerEvent.Success(it))
+                scope.launch {
+                    withTimeoutOrNull(1_000) {
+                        mEventFlow.emit( ServerEvent.Success(it) )
+                    }
+                }
             }
         }
 
@@ -181,14 +215,19 @@ class ServerProxy private constructor(
             val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
             Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
             data?.let {
-                handler.post { eventListener.onServerEvent(ServerEvent.Failure(it, error)) }
-                mEventChannel.trySend(ServerEvent.Failure(it, error))
+//                handler.post { eventListener.onServerEvent(ServerEvent.Failure(it, error)) }
+//                mEventChannel.trySend(ServerEvent.Failure(it, error))
+                scope.launch {
+                    withTimeoutOrNull(1_000) {
+                        mEventFlow.emit( ServerEvent.Failure(it, error) )
+                    }
+                }
             }
         }
 
         override fun onServerReady() {
             Log.i(TAG, "onServerReady: ${Thread.currentThread()}")
-            handler.post { eventListener.onServerConnectedAndReady() }
+//            handler.post { eventListener.onServerConnectedAndReady() }
             mState.value = ServerState.Ready
         }
     }

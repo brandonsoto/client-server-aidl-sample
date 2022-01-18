@@ -16,6 +16,8 @@ import com.brandonsoto.sample_aidl_library.common.ServerState
 import kotlinx.coroutines.*
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.random.Random
+import kotlin.system.measureTimeMillis
 
 @ExperimentalCoroutinesApi
 class ClientActivity : AppCompatActivity() {
@@ -40,6 +42,7 @@ class ClientActivity : AppCompatActivity() {
 
     private fun createProxy() {
         runBlocking { mCreateJob?.cancelAndJoin() }
+        lifecycleScope.launchWhenStarted {  }
         mCreateJob = lifecycleScope.launchWhenStarted {
             withContext(Dispatchers.Default) {
                 val proxy = withTimeoutOrNull(30_000) {
@@ -48,6 +51,7 @@ class ClientActivity : AppCompatActivity() {
                         Log.d(TAG, "createProxy: attempt: $attempt, ${Thread.currentThread()}")
                         val p = ServerProxy.create(
                             this@ClientActivity,
+                            lifecycleScope,
                             mHandler,
                             listener
                         )
@@ -57,7 +61,7 @@ class ClientActivity : AppCompatActivity() {
                             delay(100)
                         } else {
                             // wait 5 seconds to see if service connects and is ready
-                            withTimeoutOrNull(5_000) {
+                            withTimeoutOrNull(3_000) {
                                 while (!mReadyFlag.get()) {
                                     delay(50)
                                 }
@@ -88,17 +92,16 @@ class ClientActivity : AppCompatActivity() {
                         }
                     }
 
-                    lifecycleScope.launchWhenStarted {
-                        this@apply.events.collect {
-                            mResultTextView.text = "$it"
-
-                            when (it) {
-                                is ServerEvent.Success -> mResultTextView.setTextColor(Color.GREEN)
-                                is ServerEvent.Failure -> mResultTextView.setTextColor(Color.RED)
-                            }
-
-                        }
-                    }
+//                    lifecycleScope.launchWhenStarted {
+//                        this@apply.events.collect {
+//                            mResultTextView.text = "$it"
+//
+//                            when (it) {
+//                                is ServerEvent.Success -> mResultTextView.setTextColor(Color.GREEN)
+//                                is ServerEvent.Failure -> mResultTextView.setTextColor(Color.RED)
+//                            }
+//                        }
+//                    }
                 }
             }
         }
@@ -169,11 +172,43 @@ class ClientActivity : AppCompatActivity() {
                 i = count
             }
             mServerData = data
-            mServerProxy?.doSomething(data)
+
+            val i = Random.nextInt(0, 100)
+//            val job = SupervisorJob(lifecycleScope.launch(Dispatchers.Default) {
+            val job = lifecycleScope.launch(Dispatchers.Default) {
+                var result: ServerEvent? = null
+                val time = measureTimeMillis {
+                    Log.d(TAG, "START: ($i) req=$data")
+                    result = mServerProxy?.doSomethingSuspended(data)
+                    Log.d(TAG, "END: ($i) rep=$result")
+                }
+                handle(result)
+                Log.d(TAG, "onCreate: req $i took $time ms")
+            }
+//            job.invokeOnCompletion {
+//                Log.d(TAG, "COMPLETION: ($i), error=$it")
+//                synchronized(mJobs) { mJobs.remove(job) }
+//            }
+//            synchronized(mJobs) { mJobs.add(job) }
         }
 
-        createProxy()
+//        createProxy()
+        mServerProxy = ServerProxy.create(this, lifecycleScope, mHandler, listener)
+        Log.i(TAG, "onCreate: serverProxy=$mServerProxy")
+        lifecycleScope.launchWhenStarted {
+            mServerProxy?.state?.collect {
+                mResultTextView.text = "Server is $it"
+
+                when (it) {
+                    ServerState.Connected -> mResultTextView.setTextColor(Color.RED)
+                    ServerState.Disconnected -> mResultTextView.setTextColor(Color.YELLOW)
+                    ServerState.Ready -> mResultTextView.setTextColor(Color.GREEN)
+                }
+            }
+        }
     }
+
+    private val mJobs = mutableSetOf<Job>()
 
     override fun onStart() {
         Log.i(TAG, "onStart")
@@ -207,5 +242,17 @@ class ClientActivity : AppCompatActivity() {
         mServerProxy?.teardown()
         super.onDestroy()
         Log.d(TAG, "onDestroy: -")
+    }
+
+    private suspend fun handle(event: ServerEvent?) {
+        Log.d(TAG, "handle: $event")
+        withContext(Dispatchers.Main) {
+            mResultTextView.text = "$event"
+            when (event) {
+                is ServerEvent.Success -> mResultTextView.setTextColor(Color.GREEN)
+                is ServerEvent.Failure -> mResultTextView.setTextColor(Color.RED)
+                null -> mResultTextView.setTextColor(Color.RED)
+            }
+        }
     }
 }
