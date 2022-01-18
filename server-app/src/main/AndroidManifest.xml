@@ -14,6 +14,12 @@
             android:enabled="true"
             android:exported="true" />
 
+        <provider
+            android:enabled="true"
+            android:exported="true"
+            android:authorities="com.brandonsoto.sampleserver.ServerContentProvider"
+            android:name=".ServerContentProvider" />
+
         <activity
             android:name=".ServerActivity"
             android:exported="true">
