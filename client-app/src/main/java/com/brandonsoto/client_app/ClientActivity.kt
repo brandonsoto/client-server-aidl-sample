@@ -150,7 +150,7 @@ class ClientActivity : AppCompatActivity() {
                 when (it) {
                     ServerState.Connected -> {
                         mResultTextView.setTextColor(Color.RED)
-                        lifecycleScope.launch(Dispatchers.Default) { mServerProxy?.ready() } // greedily start binder connection; otherwise first reply will be slow
+                        lifecycleScope.launch(Dispatchers.Default) { mServerProxy?.doSomething(ServerData()) } // greedily start binder connection; otherwise first reply will be slow
                     }
                     ServerState.Disconnected -> mResultTextView.setTextColor(Color.YELLOW)
                     ServerState.Ready -> mResultTextView.setTextColor(Color.GREEN)

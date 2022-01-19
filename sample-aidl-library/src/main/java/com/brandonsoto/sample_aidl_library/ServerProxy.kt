@@ -91,14 +91,7 @@ class ServerProxy private constructor(private val context: Context) {
     suspend fun doSomething(data: ServerData): ServerEvent? {
         Log.v(TAG, "doSomethingSuspended: ${data.i}")
         return withTimeoutOrNull(5_000L) {
-            requestAndReceive(data, false)
-        }
-    }
-
-    suspend fun ready(): ServerEvent? {
-        Log.v(TAG, "ready:")
-        return withTimeoutOrNull(5_000) {
-            requestAndReceive(ServerData(), true)
+            requestAndReceive(data)
         }
     }
 
@@ -131,28 +124,33 @@ class ServerProxy private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun requestAndReceive(data: ServerData, ready: Boolean): ServerEvent = suspendCancellableCoroutine { continuation ->
-        val callback = object : IServerStatusListener.Stub() {
-            override fun onSuccess(data: ServerData?) {
-                Log.i(TAG, "onSuccess: data=${data?.asString()}, ${Thread.currentThread()}")
-                data?.let { continuation.resume(ServerEvent.Success(it), null) }
-            }
+    private suspend fun requestAndReceive(data: ServerData): ServerEvent = suspendCancellableCoroutine { continuation ->
+        val callback = ListenerImpl(continuation)
+        synchronized(mLock) {
+            mServerService?.doSomething(data, callback)
+        }
+    }
 
-            override fun onFailure(data: ServerData?, errorCode: Int) {
-                val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
-                Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
-                data?.let { continuation.resume(ServerEvent.Failure(it, error), null) }
-            }
-
-            override fun onReady() {
-                Log.i(TAG, "onReady: !!!")
-                continuation.resume(ServerEvent.Success(ServerData()), null)
-            }
+    private class ListenerImpl(
+        private val continuation: CancellableContinuation<ServerEvent>
+    ) : IServerStatusListener.Stub() {
+        override fun onSuccess(data: ServerData?) {
+            Log.i(TAG, "onSuccess: data=${data?.asString()}, ${Thread.currentThread()}")
+            data?.let { continuation.resume(ServerEvent.Success(it), null) }
         }
 
-        if (ready) mServerService?.ready(callback)
-        else mServerService?.doSomething(data, callback)
+        override fun onFailure(data: ServerData?, errorCode: Int) {
+            val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
+            Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
+            data?.let { continuation.resume(ServerEvent.Failure(it, error), null) }
+        }
+
+        override fun onReady() {
+            Log.i(TAG, "onReady: !!!")
+            continuation.resume(ServerEvent.Success(ServerData()), null)
+        }
     }
+
 }
 
 private fun ServerData.asString(): String {
