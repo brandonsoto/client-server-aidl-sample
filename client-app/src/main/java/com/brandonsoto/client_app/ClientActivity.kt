@@ -49,12 +49,7 @@ class ClientActivity : AppCompatActivity() {
                     repeat(25) {
                         val attempt = it + 1
                         Log.d(TAG, "createProxy: attempt: $attempt, ${Thread.currentThread()}")
-                        val p = ServerProxy.create(
-                            this@ClientActivity,
-                            lifecycleScope,
-                            mHandler,
-                            listener
-                        )
+                        val p = ServerProxy.create( this@ClientActivity )
 
                         if (p == null) {
                             // wait and try again
@@ -80,7 +75,7 @@ class ClientActivity : AppCompatActivity() {
 
                 Log.d(TAG, "createProxy: after 30 second withTimeoutOrNull. proxy=$proxy")
                 mServerProxy = (proxy as? ServerProxy)?.apply {
-                    lifecycleScope.launchWhenStarted {
+                    lifecycleScope.launch {
                         this@apply.state.collect {
                             mResultTextView.text = "Server is $it"
 
@@ -107,50 +102,6 @@ class ClientActivity : AppCompatActivity() {
         }
     }
 
-    private val listener = object : ServerProxy.Companion.ServerEventListener {
-        override fun onServerConnected() {
-            Log.d(TAG, "onServerConnected: ${Thread.currentThread()}")
-            lifecycleScope.launchWhenStarted {
-//                mResultTextView.text = "Server Connected"
-            }
-        }
-
-        override fun onServerDisconnected() {
-            mReadyFlag.set(false)
-            Log.d(TAG, "onServerDisconnected: ${Thread.currentThread()}")
-            lifecycleScope.launchWhenStarted { withContext(Dispatchers.Main) {
-//                mResultTextView.text = "Server Disconnected"
-                createProxy()
-            } }
-        }
-
-        // TODO: should this include proxy as param?
-        override fun onServerConnectedAndReady() {
-            mReadyFlag.set(true)
-            Log.d(TAG, "onServerConnectedAndReady: ${Thread.currentThread()}")
-            lifecycleScope.launchWhenStarted { withContext(Dispatchers.Main) {
-//                mResultTextView.text = "Server connected and ready!"
-            } }
-        }
-
-        override fun onServerEvent(event: ServerEvent) {
-            Log.d(TAG, "onServerEvent: $event, ${Thread.currentThread()}")
-//            lifecycleScope.launchWhenStarted {
-//                withContext(Dispatchers.Main) {
-//                    mResultTextView.text = when (event) {
-//                        is ServerEvent.Success,
-//                        is ServerEvent.Failure -> {
-//                            event.toString()
-//                        }
-//                        else -> {
-//                            "Unknown event"
-//                        }
-//                    }
-//                }
-//            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.d(TAG, "onCreate")
         super.onCreate(savedInstanceState)
@@ -174,41 +125,39 @@ class ClientActivity : AppCompatActivity() {
             mServerData = data
 
             val i = Random.nextInt(0, 100)
-//            val job = SupervisorJob(lifecycleScope.launch(Dispatchers.Default) {
-            val job = lifecycleScope.launch(Dispatchers.Default) {
+            lifecycleScope.launch(Dispatchers.Default) {
                 var result: ServerEvent? = null
                 val time = measureTimeMillis {
                     Log.d(TAG, "START: ($i) req=$data")
-                    result = mServerProxy?.doSomethingSuspended(data)
+                    result = mServerProxy?.doSomething(data)
                     Log.d(TAG, "END: ($i) rep=$result")
                 }
                 handle(result)
                 Log.d(TAG, "onCreate: req $i took $time ms")
             }
-//            job.invokeOnCompletion {
-//                Log.d(TAG, "COMPLETION: ($i), error=$it")
-//                synchronized(mJobs) { mJobs.remove(job) }
-//            }
-//            synchronized(mJobs) { mJobs.add(job) }
         }
 
 //        createProxy()
-        mServerProxy = ServerProxy.create(this, lifecycleScope, mHandler, listener)
+        mServerProxy = ServerProxy.create(this)
         Log.i(TAG, "onCreate: serverProxy=$mServerProxy")
+//        lifecycleScope.launch(Dispatchers.Default) {
+//            delay(10_000)
+//        }
         lifecycleScope.launchWhenStarted {
             mServerProxy?.state?.collect {
                 mResultTextView.text = "Server is $it"
 
                 when (it) {
-                    ServerState.Connected -> mResultTextView.setTextColor(Color.RED)
+                    ServerState.Connected -> {
+                        mResultTextView.setTextColor(Color.RED)
+                        lifecycleScope.launch(Dispatchers.Default) { mServerProxy?.ready() } // greedily start binder connection; otherwise first reply will be slow
+                    }
                     ServerState.Disconnected -> mResultTextView.setTextColor(Color.YELLOW)
                     ServerState.Ready -> mResultTextView.setTextColor(Color.GREEN)
                 }
             }
         }
     }
-
-    private val mJobs = mutableSetOf<Job>()
 
     override fun onStart() {
         Log.i(TAG, "onStart")

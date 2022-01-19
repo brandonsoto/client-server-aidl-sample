@@ -31,96 +31,28 @@ class ServerService : LifecycleService() {
     private val mLock = Any()
 
     private val mService = object : IServer.Stub() {
-        /**
-         * TODO
-         *
-         * @param data
-         * @throws SecurityException on permission
-         */
-        override fun doSomething(data: ServerData?) {
-            Log.i(TAG, "doSomething: $data, ${Thread.currentThread()}")
-            assertServicePermission()
-            val j = this@ServerService.lifecycleScope.launch {
-                Log.i(TAG, "doSomething: before withContext")
-                withContext(Dispatchers.Main) {
-                    Log.i(TAG, "doSomething: coroutine delay started")
-                    delay(500)
-                    Log.i(TAG, "doSomething: coroutine delay ended")
-                    mStatusListeners.interfaces.forEach { listener ->
-                        try {
-                            if (data?.b == true) {
-                                listener.binderInterface.onSuccess(data)
-                            } else {
-                                listener.binderInterface.onFailure(data, ServerError.GENERIC.ordinal)
-                            }
-                        } catch (e: RemoteException) {
-                            Log.e(TAG, "doSomething: Error calling status listener")
-                        }
-                    }
-                }
-            }
-
-            Log.d(TAG, "doSomething: job=$j")
-        }
-
-        override fun doSomethingSuspended(data: ServerData?) {
+        override fun doSomething(data: ServerData?, client: IServerStatusListener?) {
             Log.i(TAG, "doSomethingSuspended: $data, ${Thread.currentThread()}")
             assertServicePermission()
-            val j = this@ServerService.lifecycleScope.launch {
-                Log.i(TAG, "doSomethingSuspended: before withContext")
-                withContext(Dispatchers.Main) {
-                    Log.i(TAG, "doSomethingSuspended: coroutine delay started")
-//                    delay(500)
-                    Log.i(TAG, "doSomethingSuspended: coroutine delay ended")
-                    mStatusListeners.interfaces.forEach { listener ->
-                        try {
-                            if (data?.b == true) {
-                                listener.binderInterface.onSuccess(data)
-                            } else {
-                                listener.binderInterface.onFailure(data, ServerError.GENERIC.ordinal)
-                            }
-                        } catch (e: RemoteException) {
-                            Log.e(TAG, "doSomethingSuspended: Error calling status listener")
-                        }
+            lifecycleScope.launch {
+                client?.runCatching {
+                    if (data?.b == true) {
+                        onSuccess(data)
+                    } else {
+                        onFailure(data, ServerError.GENERIC.ordinal)
                     }
                 }
             }
-
-            Log.d(TAG, "doSomethingSuspended: job=$j")
         }
 
-        /**
-         * TODO
-         *
-         * @param listener
-         * @throws SecurityException on permission
-         * @throws IllegalArgumentException on adding binder
-         */
-        override fun registerStatusListener(listener: IServerStatusListener?) {
-            Log.i(TAG, "registerStatusListener: $listener")
+        override fun ready(client: IServerStatusListener?) {
             assertServicePermission()
-            listener?.let {
-                mStatusListeners.addBinder(it)
-
-                // TODO: service is automatically ready for now; implement a server state machine later
-                // NOTE: this state will be separate from service state - created, started, stopped, destroyed
-                it.onServerReady()
+            Log.i(TAG, "ready: server")
+            lifecycleScope.launch {
+                Log.i(TAG, "ready: server - in cr")
+                client?.onReady() ?: Log.e(TAG, "BAD")
             }
         }
-
-        /**
-         * TODO
-         *
-         * @param listener
-         * @throws SecurityException on permission
-         * @throws NoSuchElementException
-         */
-        override fun unregisterStatusListener(listener: IServerStatusListener?) {
-            Log.i(TAG, "unregisterStatusListener: $listener")
-            assertServicePermission()
-            listener?.let { mStatusListeners.removeBinder(it) }
-        }
-
     }
 
     override fun onBind(intent: Intent): IBinder {

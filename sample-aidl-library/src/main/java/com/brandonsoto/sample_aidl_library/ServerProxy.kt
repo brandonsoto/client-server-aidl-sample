@@ -17,29 +17,17 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.flow.*
 
-class ServerProxy private constructor(
-    private val context: Context,
-    private val scope: CoroutineScope,
-    private val handler: Handler, // ServiceEventListener callbacks will be called here
-    private val eventListener: ServerEventListener
-) {
+@ExperimentalCoroutinesApi
+class ServerProxy private constructor(private val context: Context) {
     companion object {
         private val TAG = ServerProxy::class.java.simpleName
         private val SERVER_SERVICE_INTENT = Intent().apply {
             component = ComponentName(SERVER_PACKAGE, SERVER_CLASS_NAME)
         }
 
-        interface ServerEventListener {
-            fun onServerConnected()
-            fun onServerDisconnected()
-            fun onServerConnectedAndReady()
-            fun onServerEvent(event: ServerEvent)
-        }
-
-
         @RequiresPermission(SERVER_PERMISSION)
-        fun create(context: Context, scope: CoroutineScope, handler: Handler, listener: ServerEventListener): ServerProxy? {
-            val proxy = ServerProxy(context, scope, handler, listener)
+        fun create(context: Context): ServerProxy? {
+            val proxy = ServerProxy(context)
             val isBound = proxy.bindToServer()
             if (isBound) {
                 return proxy
@@ -49,15 +37,6 @@ class ServerProxy private constructor(
             return null
         }
     }
-
-    private val mEventChannel = Channel<ServerEvent>(Channel.RENDEZVOUS)
-//    val events: Flow<ServerEvent> = mEventChannel.receiveAsFlow().shareIn(scope, SharingStarted.Eagerly, 10)
-//    private val mEventFlow = MutableSharedFlow<ServerEvent>(25)
-    private val mEventFlow = MutableSharedFlow<ServerEvent>()
-    val eventFlow: SharedFlow<ServerEvent> = mEventFlow
-//    val events: SharedFlow<ServerEvent> = mEventChannel.receiveAsFlow().shareIn(scope, SharingStarted.Eagerly, 10)
-//    val events: SharedFlow<ServerEvent> = mEventChannel.receiveAsFlow()
-//        .shareIn(scope, SharingStarted.Lazily)
 
     private val mState = MutableStateFlow<ServerState>(ServerState.Disconnected)
     val state: StateFlow<ServerState> = mState.asStateFlow()
@@ -69,9 +48,6 @@ class ServerProxy private constructor(
 
     @GuardedBy("mLock")
     private var mServerService: IServer? = null
-
-    @GuardedBy("mLock")
-    private var mServerStatusListener = ServerStatusListenerImpl()
 
     @GuardedBy("mLock")
     private val mServiceConnection = object : ServiceConnection {
@@ -90,11 +66,8 @@ class ServerProxy private constructor(
                 }
 
                 mBound = true
-                mServerService = serverService.apply {
-//                    handler.post { eventListener.onServerConnected() }
-                    mState.value = ServerState.Connected
-                    registerStatusListener(mServerStatusListener)
-                }
+                mServerService = serverService
+                mState.value = ServerState.Connected
             }
         }
 
@@ -110,54 +83,22 @@ class ServerProxy private constructor(
                 mBound = false
             }
 
-//            handler.post { eventListener.onServerDisconnected() }
             mState.value = ServerState.Disconnected
         }
 
     }
 
-    /**
-     * Sends a Server request for [data]. Listen for the result of the connect request
-     * via [events].
-     *
-     * @param data the data to be connected
-     * @return true if the request was successfully sent to the Server service; otherwise false
-     */
-    @RequiresPermission(SERVER_PERMISSION)
-    fun doSomething(data: ServerData): Boolean {
-        Log.v(TAG, "doSomething: $data")
-
-        try {
-            synchronized(mLock) {
-                mServerService?.run {
-                    doSomething(data)
-                    return true
-                } ?: Log.w(TAG, "doSomething: Server service not available")
-            }
-        } catch (e: RemoteException) {
-            Log.e(TAG, "doSomething: remote exception occurred - $e")
-        }
-
-        return false
-    }
-
-    suspend fun doSomethingSuspended(data: ServerData): ServerEvent? {
+    suspend fun doSomething(data: ServerData): ServerEvent? {
         Log.v(TAG, "doSomethingSuspended: ${data.i}")
         return withTimeoutOrNull(5_000L) {
-            val deferredResult: Deferred<ServerEvent?> = async {
-                val replyEvent = eventFlow
-                    .onSubscription {
-                        launch { synchronized(mLock) { mServerService?.doSomethingSuspended(data) } }
-                    }
-                    .firstOrNull {
-                        when (it) {
-                            is ServerEvent.Success -> data.i == it.data.i
-                            is ServerEvent.Failure -> data.i == it.data.i
-                        }
-                    }
-                return@async replyEvent
-            }
-            return@withTimeoutOrNull deferredResult.await()
+            requestAndReceive(data, false)
+        }
+    }
+
+    suspend fun ready(): ServerEvent? {
+        Log.v(TAG, "ready:")
+        return withTimeoutOrNull(5_000) {
+            requestAndReceive(ServerData(), true)
         }
     }
 
@@ -171,13 +112,6 @@ class ServerProxy private constructor(
     fun teardown() {
         Log.v(TAG, "teardown: ${Thread.currentThread()}")
         synchronized(mLock) {
-            try {
-                mServerService?.unregisterStatusListener(mServerStatusListener)
-            } catch (e: RemoteException) {
-                Log.e(TAG, "teardown: failed to unregister listener due to $e")
-            }
-
-            mEventChannel.close()
             context.unbindService(mServiceConnection)
             mServerService = null
             mBound = false
@@ -197,39 +131,27 @@ class ServerProxy private constructor(
         }
     }
 
-    private inner class ServerStatusListenerImpl: IServerStatusListener.Stub() {
-        override fun onSuccess(data: ServerData?) {
-            Log.i(TAG, "onSuccess: data=${data?.asString()}, ${Thread.currentThread()}")
-            data?.let {
-//                handler.post { eventListener.onServerEvent(ServerEvent.Success(it)) }
-//                mEventChannel.trySend(ServerEvent.Success(it))
-                scope.launch {
-                    withTimeoutOrNull(1_000) {
-                        mEventFlow.emit( ServerEvent.Success(it) )
-                    }
-                }
+    private suspend fun requestAndReceive(data: ServerData, ready: Boolean): ServerEvent = suspendCancellableCoroutine { continuation ->
+        val callback = object : IServerStatusListener.Stub() {
+            override fun onSuccess(data: ServerData?) {
+                Log.i(TAG, "onSuccess: data=${data?.asString()}, ${Thread.currentThread()}")
+                data?.let { continuation.resume(ServerEvent.Success(it), null) }
+            }
+
+            override fun onFailure(data: ServerData?, errorCode: Int) {
+                val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
+                Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
+                data?.let { continuation.resume(ServerEvent.Failure(it, error), null) }
+            }
+
+            override fun onReady() {
+                Log.i(TAG, "onReady: !!!")
+                continuation.resume(ServerEvent.Success(ServerData()), null)
             }
         }
 
-        override fun onFailure(data: ServerData?, errorCode: Int) {
-            val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
-            Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
-            data?.let {
-//                handler.post { eventListener.onServerEvent(ServerEvent.Failure(it, error)) }
-//                mEventChannel.trySend(ServerEvent.Failure(it, error))
-                scope.launch {
-                    withTimeoutOrNull(1_000) {
-                        mEventFlow.emit( ServerEvent.Failure(it, error) )
-                    }
-                }
-            }
-        }
-
-        override fun onServerReady() {
-            Log.i(TAG, "onServerReady: ${Thread.currentThread()}")
-//            handler.post { eventListener.onServerConnectedAndReady() }
-            mState.value = ServerState.Ready
-        }
+        if (ready) mServerService?.ready(callback)
+        else mServerService?.doSomething(data, callback)
     }
 }
 
