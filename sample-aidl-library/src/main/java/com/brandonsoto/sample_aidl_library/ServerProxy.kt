@@ -6,19 +6,20 @@ import android.content.Context.BIND_AUTO_CREATE
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
-import android.os.Handler
-import android.os.Looper
-import android.os.RemoteException
 import android.util.Log
 import androidx.annotation.GuardedBy
 import androidx.annotation.RequiresPermission
 import com.brandonsoto.sample_aidl_library.common.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.*
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 @ExperimentalCoroutinesApi
-class ServerProxy private constructor(private val context: Context) {
+class ServerProxy private constructor(
+    private val context: Context,
+    dispatcher: CoroutineDispatcher
+) {
     companion object {
         private val TAG = ServerProxy::class.java.simpleName
         private val SERVER_SERVICE_INTENT = Intent().apply {
@@ -26,8 +27,11 @@ class ServerProxy private constructor(private val context: Context) {
         }
 
         @RequiresPermission(SERVER_PERMISSION)
-        fun create(context: Context): ServerProxy? {
-            val proxy = ServerProxy(context)
+        fun create(
+            context: Context,
+            dispatcher: CoroutineDispatcher = Dispatchers.Default
+        ): ServerProxy? {
+            val proxy = ServerProxy(context, dispatcher)
             val isBound = proxy.bindToServer()
             if (isBound) {
                 return proxy
@@ -38,10 +42,9 @@ class ServerProxy private constructor(private val context: Context) {
         }
     }
 
-    private val mState = MutableStateFlow<ServerState>(ServerState.Disconnected)
-    val state: StateFlow<ServerState> = mState.asStateFlow()
-
     private val mLock = Any()
+    private val mScope: CoroutineScope
+    private val mState = MutableStateFlow<ServerState>(ServerState.Disconnected)
 
     @GuardedBy("mLock")
     private var mBound = false
@@ -52,7 +55,10 @@ class ServerProxy private constructor(private val context: Context) {
     @GuardedBy("mLock")
     private val mServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            Log.d(TAG, "onServiceConnected: name=$name, service=$service, ${Thread.currentThread()}")
+            Log.d(
+                TAG,
+                "onServiceConnected: name=$name, service=$service, ${Thread.currentThread()}"
+            )
             synchronized(mLock) {
                 if (mServerService != null) {
                     Log.w(TAG, "onServiceConnected: binder already connected")
@@ -81,17 +87,26 @@ class ServerProxy private constructor(private val context: Context) {
 
                 mServerService = null
                 mBound = false
+                mState.value = ServerState.Disconnected
             }
-
-            mState.value = ServerState.Disconnected
         }
+    }
 
+    val state: StateFlow<ServerState> = mState.asStateFlow()
+
+    init {
+        val job = SupervisorJob().apply {
+            invokeOnCompletion { Log.i(TAG, "Completed proxy job: error=$it") }
+        }
+        mScope = CoroutineScope(job + dispatcher + CoroutineName("server_proxy"))
     }
 
     suspend fun doSomething(data: ServerData): ServerEvent? {
         Log.v(TAG, "doSomethingSuspended: ${data.i}")
-        return withTimeoutOrNull(5_000L) {
-            requestAndReceive(data)
+        return withContext(mScope.coroutineContext) {
+            withTimeoutOrNull(5_000L) {
+                requestAndReceive(data)
+            }
         }
     }
 
@@ -109,6 +124,7 @@ class ServerProxy private constructor(private val context: Context) {
             mServerService = null
             mBound = false
         }
+        mScope.cancel("teardown")
     }
 
     private fun bindToServer(): Boolean {
@@ -118,18 +134,20 @@ class ServerProxy private constructor(private val context: Context) {
                 return true
             }
 
-            mBound = context.bindService(SERVER_SERVICE_INTENT, mServiceConnection, BIND_AUTO_CREATE)
+            mBound =
+                context.bindService(SERVER_SERVICE_INTENT, mServiceConnection, BIND_AUTO_CREATE)
             Log.v(TAG, "bindToService: bound = $mBound")
             return mBound
         }
     }
 
-    private suspend fun requestAndReceive(data: ServerData): ServerEvent = suspendCancellableCoroutine { continuation ->
-        val callback = ListenerImpl(continuation)
-        synchronized(mLock) {
-            mServerService?.doSomething(data, callback)
+    private suspend fun requestAndReceive(data: ServerData): ServerEvent =
+        suspendCancellableCoroutine { continuation ->
+            val callback = ListenerImpl(continuation)
+            synchronized(mLock) {
+                mServerService?.doSomething(data, callback)
+            }
         }
-    }
 
     private class ListenerImpl(
         private val continuation: CancellableContinuation<ServerEvent>
@@ -141,7 +159,10 @@ class ServerProxy private constructor(private val context: Context) {
 
         override fun onFailure(data: ServerData?, errorCode: Int) {
             val error = errorCode.asEnumOrDefault(ServerError.UNKNOWN)
-            Log.e(TAG, "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}")
+            Log.e(
+                TAG,
+                "onFailure: data=${data?.asString()}, errorCode=$errorCode, ${Thread.currentThread()}"
+            )
             data?.let { continuation.resume(ServerEvent.Failure(it, error), null) }
         }
 
